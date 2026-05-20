@@ -5,3 +5,6 @@
 __pycache__/
 *.pyc
 *.pyo
+
+#Majd's data (too large to be tracked)
+Majd_data/

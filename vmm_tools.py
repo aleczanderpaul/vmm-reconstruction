@@ -102,16 +102,6 @@ def read_cluster(file_loc):
 
     return df
 
-'''    'strips0' : clusters_detector['strips0'].array(),
-    'strips1' : clusters_detector['strips1'].array(),
-    'strips2' : clusters_detector['strips2'].array(),
-    'adcs0' : clusters_detector['adcs0'].array(),
-    'adcs1' : clusters_detector['adcs1'].array(),
-    'adcs2' : clusters_detector['adcs2'].array(),
-    'times0' : clusters_detector['times0'].array(),
-    'times1' : clusters_detector['times1'].array(),
-    'times2' : clusters_detector['times2'].array(),  '''
-
 #combine the hit and cluster data of every ROOT file in a folder and return Pandas dataframes
 def combineDataFrames(rootFolder): #input is string with the name of the folder
     rootFiles = sorted(glob.glob(os.path.join(rootFolder, "*.root"))) #using the sorted feature assuming the filenames have a meaning (e.g., chronological)
@@ -290,3 +280,222 @@ def combineDataFramesMajd(rootFolder): #input is string with the name of the fol
     df_hits = pd.concat(hits, ignore_index=True)
     df_clusters = pd.concat(clusters, ignore_index=True)
     return df_hits, df_clusters
+
+def read_hits_in_cluster(file_loc):
+
+    file = uproot.open(file_loc)
+
+    clusters_detector = file['clusters_detector']['clusters_detector']
+
+    strips0 = clusters_detector['strips0'].array()
+    strips1 = clusters_detector['strips1'].array()
+    strips2 = clusters_detector['strips2'].array()
+    adcs0 = clusters_detector['adcs0'].array()
+    adcs1 = clusters_detector['adcs1'].array()
+    adcs2 = clusters_detector['adcs2'].array()
+    times0 = clusters_detector['times0'].array()
+    times1 = clusters_detector['times1'].array()
+    times2 = clusters_detector['times2'].array()
+
+    df = {
+    'strips0': strips0,
+    'strips1': strips1,
+    'strips2': strips2,
+    'adcs0':   adcs0,
+    'adcs1':   adcs1,
+    'adcs2':   adcs2,
+    'times0':  times0,
+    'times1':  times1,
+    'times2':  times2,
+    }
+
+    return df
+
+def read_hits_in_cluster_majd(file_loc):
+
+    file = uproot.open(file_loc)
+
+    clusters_detector = file['clusters_detector']['clusters_detector']
+
+    strips0 = clusters_detector['strips0'].array()
+    strips1 = clusters_detector['strips1'].array()
+    adcs0 = clusters_detector['adcs0'].array()
+    adcs1 = clusters_detector['adcs1'].array()
+    times0 = clusters_detector['times0'].array()
+    times1 = clusters_detector['times1'].array()
+
+    df = {
+    'strips0': strips0,
+    'strips1': strips1,
+    'adcs0':   adcs0,
+    'adcs1':   adcs1,
+    'times0':  times0,
+    'times1':  times1,
+    }
+
+    return df
+
+def set_axes_equal(ax):
+    """
+    Make axes of 3D plot have equal scale so that spheres appear as spheres,
+    cubes as cubes, etc.
+
+    Input
+      ax: a matplotlib axis, e.g., as output from plt.gca().
+    """
+
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
+
+    x_range = abs(x_limits[1] - x_limits[0])
+    x_middle = np.mean(x_limits)
+    y_range = abs(y_limits[1] - y_limits[0])
+    y_middle = np.mean(y_limits)
+    z_range = abs(z_limits[1] - z_limits[0])
+    z_middle = np.mean(z_limits)
+
+    # The plot bounding box is a sphere in the sense of the infinity
+    # norm, hence I call half the max range the plot radius.
+    plot_radius = 0.5*max([x_range, y_range, z_range])
+
+    ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+    ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+    ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+
+# A function to get the transverse mismeasurments of a 3D reconstrcuted track
+def GetTransErrs(x_vals,y_vals,z_vals,charges,charge_weighting = True):
+
+    if charge_weighting == False:
+        charges = np.ones(len(x_vals))
+
+    X = np.array([x_vals,y_vals,z_vals]).T
+
+    # 1) Center on barycenter
+    # Barycenter is the charge-weighted mean position
+    x_b = np.sum(X*(charges.reshape(len(charges),1)),axis=0)/np.sum(charges)
+    # Shift data to barycenter
+    X = X-x_b
+
+    # 2) Find principle axis
+    # Use charges for weights
+    W = charges.reshape(len(charges),1)
+    # Compute weighted covariance matrix
+    WCM = ( (W*X).T @ X ) / np.sum(W)
+    U1,S1,D1 =  np.linalg.svd(WCM)
+    v_PA = np.array([D1[0][0],D1[0][1],D1[0][2]])
+
+    v_PA = np.sign(v_PA[2]) * v_PA
+
+    # projection of mean-centered position onto principle axis
+    proj = np.array([(X@v_PA)*v_PA[0],(X@v_PA)*v_PA[1],(X@v_PA)*v_PA[2]]).T
+
+    # Mismeasurement vectors
+    # The distribution of the x and y values gives us sigma x and sigma y
+    err =X-proj
+
+    # Compute transverse mismeasurements using method 1 (see slides)
+    delta_xs_1 = err[:,0]
+    delta_ys_1 = err[:,1]
+
+    # Compute transverse mismeasurements using method 2 (see slides)
+    delta_xs_2 = X[:,0] - ( ( v_PA[0] / v_PA[2] ) * X[:,2] ) 
+    delta_ys_2 = X[:,1] - ( ( v_PA[1] / v_PA[2] ) * X[:,2] )
+    
+    return z_vals, delta_xs_1, delta_ys_1, delta_xs_2, delta_ys_2, v_PA, x_b
+
+def Reconstruction3D(mu, sigma, n_sigma, times_x, times_y, ADC_x, ADC_y, strips_x, strips_y, gain_x, gain_y, pitch_x, pitch_y, v_drift):
+    # This 3D reconstruction algorithim only matches x and y hits if they are within a time window specified by mu, sigma, n_sigma
+    # After x and y hits are matched, the x ADCs are spread evenly among all matched y hits and vice versa
+    # The time is the average of the x hit time and y hit time
+    # Unmatched hits are spread along all matched vertices via a time-weighted spread
+
+    # Truth array - contains truth value for x and y hits that fire within the time gap window.
+    # i.e. if Tarray_{ij} = True, then the ith x hit and the jth y hit are within the gap window
+    # and should be combined, this constitutes an xy-hit
+    Tarray = np.abs((np.subtract.outer(times_x,times_y)-mu) / sigma) < n_sigma
+
+    if (True in Tarray) == False:
+        print(f"Warning: None of the hits are matched in time within {n_sigma} sigma")
+
+
+    # This counts the number of simultaniously triggering y hits for each x hit
+    TCol = np.sum(Tarray,axis=1)*1.0
+    # This counts the number of simultaniously triggering x hits for each y hit
+    TRow = np.sum(Tarray,axis=0)*1.0
+
+    # Throw an error if there are unmatched hits
+    # This can be updated later
+    if (0 in TCol) or (0 in TRow):
+        print("Warning: Unmatched hits. Performing time-weighted spread")
+
+    # Collect unmatched hit info
+    # Convert ADC to electron count units
+    unmatched_ADCs = np.append(ADC_x[ TCol == 0 ] * (6240.0 / gain_x), ADC_y[ TRow == 0 ] * (6240.0 / gain_y))
+    # Shift x and y times based on mean offset
+    unmatched_times = np.append(times_x[ TCol == 0 ] - (mu/2.0) ,  times_y[ TRow == 0 ] + (mu/2.0) )
+
+    # Rebuild arrays, ommiting unmatched hits
+    # Convert ADC to electron count units
+    x_times = times_x[ TCol > 0 ]
+    ADC_x = ADC_x[ TCol > 0 ] * (6240.0 / gain_x)
+    strips_x = strips_x[ TCol > 0 ]
+    y_times = times_y[ TRow > 0 ]
+    ADC_y = ADC_y[ TRow > 0 ] * (6240.0 / gain_y)
+    strips_y = strips_y[ TRow > 0 ]
+    Tarray = np.abs((np.subtract.outer(x_times,y_times)-mu) / sigma) < n_sigma
+    TCol = np.sum(Tarray,axis=1)*1.0
+    TRow = np.sum(Tarray,axis=0)*1.0
+
+    # This divides the ADC of the x hit by the number of simultaniously triggering y hits
+    ADCx_V = np.divide(ADC_x,TCol)
+
+    # This is a matrix of the x ADC contribution to all xy-hits
+    elecx_M = np.multiply(ADCx_V[..., None],Tarray)
+
+    # This divides the ADC of the y hit by the number of simultaniously triggering x hits
+    ADCy_V = np.divide(ADC_y,TRow)
+
+    # This is a matrix of the y ADC contribution to all xy-hits
+    elecy_M = np.multiply(ADCy_V,Tarray)
+
+    # This is the total ADC assigned to each xy-hit
+    elec_M = elecx_M+elecy_M
+
+    # This holds the x strip position for each xy-hit
+    Stripx_M = np.multiply(strips_x[..., None],Tarray)
+
+    # This holds the y strip position for each xy-hit
+    Stripy_M = np.multiply(strips_y,Tarray)
+
+    # This holds the x time measurment for each xy-hit
+    Timex_M = np.multiply(x_times[..., None],Tarray)
+
+    # This holds the y time measurment for each xy-hit
+    Timey_M = np.multiply(y_times,Tarray)
+
+    # This holds the average time measurment for each xy-hit
+    Time_M = (Timex_M + Timey_M) / 2.0
+
+    # absolute time offsets between matched vertices and unmatched hits
+    abs_t_off = np.abs( Time_M-np.tensordot(unmatched_times, Tarray, axes=0) )
+    # Really we want to weight by the inverse time difference 
+    abs_t_off = np.reciprocal(abs_t_off, where=abs_t_off != 0, out=np.zeros_like(abs_t_off))
+
+    # Corresponding umatched ADC and time offset normalization factor
+    ADC_norm = unmatched_ADCs/abs_t_off.sum(axis=1).sum(axis=1)
+
+    # Multiply togather and sum to get total unmatched ADC contribution for each vertex
+    unmatched_contrib = (abs_t_off*np.tensordot(ADC_norm, Tarray, axes=0)).sum(axis=0)
+
+    # Add to ADC matrix
+    elec_M += unmatched_contrib
+
+    # Convert to physical quatities
+    x_vals = Stripx_M[Tarray]*pitch_x            # Multiply by pitch for physical distance
+    y_vals = Stripy_M[Tarray]*pitch_y            # Multiply by pitch for physical distance
+    weights = elec_M[Tarray]                     # Weight is number of electrons
+    z_vals  = Time_M[Tarray]*v_drift             # multiply by drift speed for z
+    z_vals = z_vals - np.min(z_vals)             # Shift z_vals so that minimum is at z=0
+
+    return x_vals, y_vals, z_vals, weights
