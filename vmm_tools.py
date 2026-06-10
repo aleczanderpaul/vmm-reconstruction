@@ -273,13 +273,15 @@ def combineDataFramesMajd(rootFolder): #input is string with the name of the fol
     rootFiles = sorted(glob.glob(os.path.join(rootFolder, "*.root"))) #using the sorted feature assuming the filenames have a meaning (e.g., chronological)
     hits = []
     clusters = []
+    data_duration = 5*60
     for filePath in rootFiles:
-        hits.append(read_hit(filePath))
+        df_hits = read_hit(filePath)
+        hits.append(df_hits)
         clusters.append(read_cluster_Majd(filePath))
 
     df_hits = pd.concat(hits, ignore_index=True)
     df_clusters = pd.concat(clusters, ignore_index=True)
-    return df_hits, df_clusters
+    return df_hits, df_clusters, data_duration
 
 def read_hits_in_cluster(file_loc):
 
